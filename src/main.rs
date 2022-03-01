@@ -1,5 +1,6 @@
-use std::{env::args, fs};
-
+use console::Term;
+use rand::Rng;
+use std::{collections::HashMap, env::args, fs, thread, time};
 struct Stack {
     pointer: usize,
     data: [u16; 16],
@@ -35,6 +36,7 @@ struct Chip8 {
     key: u8,
     memory: [u8; 4096],
     display: [[bool; 64]; 32],
+    keyboard_layout: HashMap<u8, u8>,
     redraw: bool,
 }
 
@@ -49,6 +51,7 @@ impl Chip8 {
             stack: Stack::new(),
             key: 0,
             memory: [0; 4096],
+            keyboard_layout: HashMap::new(),
             display: [[false; 64]; 32],
             redraw: false,
         }
@@ -80,9 +83,16 @@ impl Chip8 {
             }
         }
     }
+
+    fn ld_layout(&mut self) {
+        let keys = "x1234qwerasdfzcv";
+        for (index, &element) in keys.as_bytes().iter().enumerate() {
+            self.keyboard_layout.insert(element, index as u8);
+        }
+    }
     fn cls(&mut self) {
         self.display = [[false; 64]; 32];
-        // self.redraw = true;
+        std::process::Command::new("clear").status().unwrap();
     }
     fn ret(&mut self) {
         self.pc = self.stack.pop();
@@ -197,7 +207,10 @@ impl Chip8 {
         self.pc = addr + self.registers[0] as u16;
     }
 
-    fn rand(&mut self, x: usize, addr: u16) {}
+    fn rand(&mut self, x: usize, addr: u16) {
+        let random_byte = rand::thread_rng().gen::<u8>();
+        self.registers[x] = random_byte & addr as u8;
+    }
 
     fn drw(&mut self, x: usize, y: usize, n: u8) {
         let c_x = self.registers[x] as usize;
@@ -207,14 +220,12 @@ impl Chip8 {
             for j in (0..8).rev() {
                 let row = (c_y + i as usize) % 32;
                 let col = (c_x + j) % 64;
-                println!("{}", col);
                 if self.display[row][col] {
                     self.registers[15] = 1;
                 } else {
                     self.registers[15] = 0;
                 }
                 let shift = j as i32 - 7;
-                println!("{}", shift.abs());
                 let temp = pixel >> shift.abs();
                 if temp & 1 == 1 {
                     self.display[row][col] ^= true;
@@ -222,7 +233,6 @@ impl Chip8 {
                     self.display[row][col] ^= false
                 }
             }
-            println!("{:08b}", pixel);
         }
         self.redraw = true;
     }
@@ -295,6 +305,15 @@ impl Chip8 {
         }
         // println!("--------- End of Instructions ----------")
         // println!("The counter is {}", counter);
+    }
+
+    fn emulate_actual_processor(&self) {
+        let instruction_per_second: i32 = 700;
+        let delay = (1 / instruction_per_second) as u64;
+        let duration = time::Duration::from_millis(delay);
+        let now = time::Instant::now();
+        thread::sleep(duration);
+        assert!(now.elapsed() >= duration);
     }
 
     fn run(&mut self, pc: &usize) {
@@ -429,27 +448,42 @@ impl Chip8 {
 }
 
 fn main() {
+    let stdout = Term::buffered_stdout();
     let mut emulator = Chip8::new();
     emulator.ld_font();
+    emulator.ld_layout();
     let args: Vec<String> = args().collect();
     let filename = &args[1];
     emulator.load_rom(filename);
-    while emulator.pc < 4095 {
-        emulator.redraw = false;
-        emulator.run(&(emulator.pc as usize));
-        if emulator.redraw {
-            for row in emulator.display {
-                for col in row {
-                    if col {
-                        print!("=");
-                    } else {
-                        print!(" ");
-                    }
-                }
-                println!("");
+    loop {
+        if emulator.dt == 0 {
+            if let Ok(character) = stdout.read_char() {
+                let character_byte = character.to_string().as_bytes()[0];
+                emulator.key = match emulator.keyboard_layout.get(&character_byte) {
+                    Some(val) => *val,
+                    _ => emulator.key,
+                };
             }
-            // emulator.cls();
+            emulator.redraw = false;
+            emulator.run(&(emulator.pc as usize));
+            if emulator.redraw {
+                std::process::Command::new("clear").status().unwrap();
+                for row in emulator.display {
+                    for col in row {
+                        if col {
+                            print!("=");
+                        } else {
+                            print!(" ");
+                        }
+                    }
+                    println!("");
+                }
+                // emulator.cls();
+            }
+            if emulator.pc < 4093 {
+                emulator.pc += 2;
+            }
+            emulator.emulate_actual_processor();
         }
-        emulator.pc += 2;
     }
 }
