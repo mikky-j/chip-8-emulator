@@ -42,7 +42,7 @@ impl Chip8 {
     fn new() -> Chip8 {
         Chip8 {
             registers: [0; 16],
-            i: 0x200,
+            i: 0,
             dt: 0,
             st: 0,
             pc: 0x200,
@@ -82,7 +82,7 @@ impl Chip8 {
     }
     fn cls(&mut self) {
         self.display = [[false; 64]; 32];
-        self.redraw = true;
+        // self.redraw = true;
     }
     fn ret(&mut self) {
         self.pc = self.stack.pop();
@@ -204,19 +204,25 @@ impl Chip8 {
         let c_y = self.registers[y] as usize;
         for i in 0..n {
             let pixel = self.memory[self.i as usize + i as usize];
-            for j in 0..4 {
+            for j in (0..8).rev() {
                 let row = (c_y + i as usize) % 32;
                 let col = (c_x + j) % 64;
+                println!("{}", col);
                 if self.display[row][col] {
                     self.registers[15] = 1;
                 } else {
                     self.registers[15] = 0;
                 }
-                let temp = pixel >> (j + 4);
+                let shift = j as i32 - 7;
+                println!("{}", shift.abs());
+                let temp = pixel >> shift.abs();
                 if temp & 1 == 1 {
                     self.display[row][col] ^= true;
+                } else {
+                    self.display[row][col] ^= false
                 }
             }
+            println!("{:08b}", pixel);
         }
         self.redraw = true;
     }
@@ -284,8 +290,10 @@ impl Chip8 {
         for i in 0..(contents.len() / 2) {
             self.memory[0x200 + (i * 2)] = contents[(i * 2)];
             self.memory[0x200 + 1 + (i * 2)] = contents[(i * 2) + 1];
+            // println!("{:02x}{:02x}", contents[i * 2], contents[(i * 2) + 1])
             // counter += 1;
         }
+        // println!("--------- End of Instructions ----------")
         // println!("The counter is {}", counter);
     }
 
@@ -370,11 +378,11 @@ impl Chip8 {
                 self.sne_registers(x, y);
             }
             0xA000 => {
-                let byte = param & 0x00FF;
+                let byte = param & 0x0FFF;
                 self.ld_i(byte);
             }
             0xB000 => {
-                let byte = param & 0x00FF;
+                let byte = param & 0x0FFF;
                 self.jp(byte);
             }
             0xC000 => {
@@ -426,7 +434,7 @@ fn main() {
     let args: Vec<String> = args().collect();
     let filename = &args[1];
     emulator.load_rom(filename);
-    while emulator.pc <= 644 {
+    while emulator.pc < 4095 {
         emulator.redraw = false;
         emulator.run(&(emulator.pc as usize));
         if emulator.redraw {
