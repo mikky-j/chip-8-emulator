@@ -38,6 +38,7 @@ struct Chip8 {
     display: [[bool; 64]; 32],
     keyboard_layout: HashMap<u8, u8>,
     redraw: bool,
+    instructions_per_second: f64,
 }
 
 impl Chip8 {
@@ -49,10 +50,11 @@ impl Chip8 {
             st: 0,
             pc: 0x200,
             stack: Stack::new(),
-            key: 0,
+            key: 16,
             memory: [0; 4096],
             keyboard_layout: HashMap::new(),
             display: [[false; 64]; 32],
+            instructions_per_second: 0.7,
             redraw: false,
         }
     }
@@ -96,7 +98,6 @@ impl Chip8 {
     }
     fn ret(&mut self) {
         self.pc = self.stack.pop();
-        self.stack.pointer -= 1;
     }
 
     fn jump(&mut self, addr: u16) {
@@ -174,8 +175,8 @@ impl Chip8 {
         //     self.registers[15] = 1;
         //     self.registers[x] /= 2;
         // }
+        self.registers[15] = self.registers[x] & 1;
         self.registers[x] >>= 1;
-        self.registers[x] /= 2;
     }
 
     fn subn(&mut self, x: usize, y: usize) {
@@ -188,9 +189,8 @@ impl Chip8 {
     }
 
     fn shl(&mut self, x: usize) {
-        self.registers[x] <<= 1;
         self.registers[15] = self.registers[x] >> 7;
-        self.registers[x] *= 2;
+        self.registers[x] <<= 1;
     }
 
     fn sne_registers(&mut self, x: usize, y: usize) {
@@ -209,6 +209,7 @@ impl Chip8 {
 
     fn rand(&mut self, x: usize, addr: u16) {
         let random_byte = rand::thread_rng().gen::<u8>();
+        println!("{:02x}", random_byte);
         self.registers[x] = random_byte & addr as u8;
     }
 
@@ -308,8 +309,8 @@ impl Chip8 {
     }
 
     fn emulate_actual_processor(&self) {
-        let instruction_per_second: i32 = 700;
-        let delay = (1 / instruction_per_second) as u64;
+        let instruction_per_second: f32 = 0.7;
+        let delay = (1.0 / self.instructions_per_second) as u64;
         let duration = time::Duration::from_millis(delay);
         let now = time::Instant::now();
         thread::sleep(duration);
@@ -381,12 +382,13 @@ impl Chip8 {
                     0x0005 => self.sub(x, y),
                     0x0006 => {
                         self.shr(x);
-                        println!("Activated Function shr")
+                        println!("Activated Function shr");
+                        self.instructions_per_second = 0.01;
                     }
                     0x0007 => self.subn(x, y),
                     0x000E => {
                         self.shl(x);
-                        println!("Activated Function shl")
+                        println!("Activated Function shl");
                     }
                     _ => (),
                 }
@@ -405,7 +407,7 @@ impl Chip8 {
                 self.jp(byte);
             }
             0xC000 => {
-                println!("Activated Function");
+                println!("Activated Function rand");
                 let x = (param & 0x0F00) >> 8;
                 let byte = param & 0x00FF;
                 self.rand(x as usize, byte);
@@ -431,7 +433,10 @@ impl Chip8 {
                 let byte = param & 0x00FF;
                 match byte {
                     0x0007 => self.ld_delay(x),
-                    0x000A => self.ld_key(x),
+                    0x000A => {
+                        println!("Checked for the key {}", self.key);
+                        self.ld_key(x);
+                    }
                     0x0015 => self.set_dt(x),
                     0x0018 => self.set_st(x),
                     0x001E => self.add_i(x),
@@ -448,7 +453,7 @@ impl Chip8 {
 }
 
 fn main() {
-    let stdout = Term::buffered_stdout();
+    // let stdout = Term::buffered_stdout();
     let mut emulator = Chip8::new();
     emulator.ld_font();
     emulator.ld_layout();
@@ -457,13 +462,13 @@ fn main() {
     emulator.load_rom(filename);
     loop {
         if emulator.dt == 0 {
-            if let Ok(character) = stdout.read_char() {
-                let character_byte = character.to_string().as_bytes()[0];
-                emulator.key = match emulator.keyboard_layout.get(&character_byte) {
-                    Some(val) => *val,
-                    _ => emulator.key,
-                };
-            }
+            // if let Ok(character) = stdout.read_char() {
+            //     let character_byte = character.to_string().as_bytes()[0];
+            //     emulator.key = match emulator.keyboard_layout.get(&character_byte) {
+            //         Some(val) => *val,
+            //         _ => emulator.key,
+            //     };
+            // }
             emulator.redraw = false;
             emulator.run(&(emulator.pc as usize));
             if emulator.redraw {
@@ -480,10 +485,10 @@ fn main() {
                 }
                 // emulator.cls();
             }
-            if emulator.pc < 4093 {
-                emulator.pc += 2;
-            }
-            emulator.emulate_actual_processor();
+            emulator.pc += 2;
+        } else {
+            emulator.dt -= 1;
         }
+        emulator.emulate_actual_processor();
     }
 }
