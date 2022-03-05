@@ -1,6 +1,6 @@
 use console::Term;
 use rand::Rng;
-use std::{collections::HashMap, env::args, fs, thread, time};
+use std::{collections::HashMap, env::args, fs, ops::Add, thread, time};
 struct Stack {
     data: Vec<u16>,
 }
@@ -138,13 +138,13 @@ impl Chip8 {
     }
 
     fn add(&mut self, x: usize, data: u8) {
-        let res = self.registers[x] as u16 + data as u16;
-        // if res > 255 {
-        //     self.registers[15] = 1
-        // } else {
-        //     self.registers[15] = 0;
-        // }
-        self.registers[x] = (res & 0xFF) as u8;
+        let (res, overflow) = self.registers[x].overflowing_add(data);
+        if overflow {
+            self.registers[15] = 1
+        } else {
+            self.registers[15] = 0;
+        }
+        self.registers[x] = res;
     }
 
     fn ld_registers(&mut self, x: usize, y: usize) {
@@ -161,24 +161,26 @@ impl Chip8 {
         self.registers[x] ^= self.registers[y];
     }
     fn add_registers(&mut self, x: usize, y: usize) {
-        let lhs = self.registers[x] as u16;
-        let rhs = self.registers[y] as u16;
-        let result = lhs + rhs;
-        if result > 0xFF {
+        // let lhs = self.registers[x] as u16;
+        // let rhs = self.registers[y] as u16;
+        // let result = lhs + rhs;
+        let (res, overflowing) = self.registers[x].overflowing_add(self.registers[y]);
+        if overflowing {
             self.registers[15] = 1;
         } else {
             self.registers[15] = 0;
         }
-        self.registers[x] = (result & 0xFF) as u8;
+        self.registers[x] = res;
     }
 
     fn sub(&mut self, x: usize, y: usize) {
-        if self.registers[x] >= self.registers[y] {
+        let (res, overflow) = self.registers[x].overflowing_sub(self.registers[y]);
+        if overflow {
             self.registers[15] = 1;
         } else {
             self.registers[15] = 0;
         }
-        self.registers[x] = (self.registers[x] as i32 - self.registers[y] as i32).abs() as u8;
+        self.registers[x] = res;
     }
 
     fn shr(&mut self, x: usize, y: usize) {
@@ -195,12 +197,13 @@ impl Chip8 {
     }
 
     fn subn(&mut self, x: usize, y: usize) {
-        if self.registers[y] >= self.registers[x] {
+        let (res, overflow) = self.registers[y].overflowing_sub(self.registers[x]);
+        if overflow {
             self.registers[15] = 1;
         } else {
             self.registers[15] = 0;
         }
-        self.registers[x] = (self.registers[y] as i32 - self.registers[x] as i32).abs() as u8;
+        self.registers[x] = res;
     }
 
     fn shl(&mut self, x: usize, y: usize) {
