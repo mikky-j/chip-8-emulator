@@ -2,28 +2,25 @@ use console::Term;
 use rand::Rng;
 use std::{collections::HashMap, env::args, fs, thread, time};
 struct Stack {
-    pointer: usize,
-    data: [u16; 16],
+    data: Vec<u16>,
 }
 
 impl Stack {
     fn new() -> Stack {
-        Stack {
-            pointer: 0,
-            data: [0; 16],
-        }
+        Stack { data: vec![] }
     }
     fn push(&mut self, n: u16) {
-        self.pointer += 1;
-        if self.pointer > 15 {
-            panic!("The stack is filled up");
-        }
-        self.data[self.pointer] = n;
+        // self.pointer += 1;
+        // if self.pointer > 15 {
+        //     panic!("The stack is filled up");
+        // }
+        self.data.push(n);
     }
     fn pop(&mut self) -> u16 {
-        let result = self.data[self.pointer];
-        self.pointer -= 1;
-        result
+        // let result = self.data[self.pointer.abs() as usize];
+        // self.pointer -= 1;
+        // result
+        self.data.pop().unwrap()
     }
 }
 struct Chip8 {
@@ -38,7 +35,10 @@ struct Chip8 {
     display: [[bool; 64]; 32],
     keyboard_layout: HashMap<u8, u8>,
     redraw: bool,
+    quirk_shift: bool,
+    load_store: bool,
     instructions_per_second: f64,
+    sp: u16,
 }
 
 impl Chip8 {
@@ -48,14 +48,17 @@ impl Chip8 {
             i: 0,
             dt: 0,
             st: 0,
+            sp: 0,
             pc: 0x200,
             stack: Stack::new(),
             key: 16,
             memory: [0; 4096],
             keyboard_layout: HashMap::new(),
             display: [[false; 64]; 32],
-            instructions_per_second: 0.7,
+            instructions_per_second: 100.0,
             redraw: false,
+            quirk_shift: false,
+            load_store: false,
         }
     }
     fn ld_font(&mut self) {
@@ -66,7 +69,7 @@ impl Chip8 {
             [0xF0, 0x10, 0xF0, 0x10, 0xF0], // 3
             [0x90, 0x90, 0xF0, 0x10, 0x10], // 4
             [0xF0, 0x80, 0xF0, 0x10, 0xF0], // 5
-            [0xF0, 0x80, 0xF0, 0x40, 0x90], // 6
+            [0xF0, 0x80, 0xF0, 0x90, 0xF0], // 6
             [0xF0, 0x10, 0x20, 0x40, 0x40], // 7
             [0xF0, 0x90, 0xF0, 0x90, 0xF0], // 8
             [0xF0, 0x90, 0xF0, 0x10, 0xF0], // 9
@@ -95,8 +98,10 @@ impl Chip8 {
     fn cls(&mut self) {
         self.display = [[false; 64]; 32];
         std::process::Command::new("clear").status().unwrap();
+        self.redraw = true;
     }
     fn ret(&mut self) {
+        self.sp -= 1;
         self.pc = self.stack.pop();
     }
 
@@ -106,6 +111,7 @@ impl Chip8 {
 
     fn call(&mut self, addr: u16) {
         self.stack.push(self.pc);
+        self.sp += 1;
         self.pc = addr;
     }
 
@@ -132,7 +138,13 @@ impl Chip8 {
     }
 
     fn add(&mut self, x: usize, data: u8) {
-        self.registers[x] += data;
+        let res = self.registers[x] as u16 + data as u16;
+        // if res > 255 {
+        //     self.registers[15] = 1
+        // } else {
+        //     self.registers[15] = 0;
+        // }
+        self.registers[x] = (res & 0xFF) as u8;
     }
 
     fn ld_registers(&mut self, x: usize, y: usize) {
@@ -152,45 +164,52 @@ impl Chip8 {
         let lhs = self.registers[x] as u16;
         let rhs = self.registers[y] as u16;
         let result = lhs + rhs;
-        if result > 255 {
-            self.registers[x] = 255;
+        if result > 0xFF {
             self.registers[15] = 1;
         } else {
-            self.registers[x] = result as u8;
             self.registers[15] = 0;
         }
+        self.registers[x] = (result & 0xFF) as u8;
     }
 
     fn sub(&mut self, x: usize, y: usize) {
-        if self.registers[x] > self.registers[y] {
+        if self.registers[x] >= self.registers[y] {
             self.registers[15] = 1;
-            self.registers[x] -= self.registers[y];
         } else {
             self.registers[15] = 0;
         }
+        self.registers[x] = (self.registers[x] as i32 - self.registers[y] as i32).abs() as u8;
     }
 
-    fn shr(&mut self, x: usize) {
+    fn shr(&mut self, x: usize, y: usize) {
         // if self.registers[x] ^ 1 == self.registers[x] - 1 {
         //     self.registers[15] = 1;
         //     self.registers[x] /= 2;
         // }
-        self.registers[15] = self.registers[x] & 1;
-        self.registers[x] >>= 1;
+        let mut y = y;
+        if self.quirk_shift {
+            y = x;
+        }
+        self.registers[15] = self.registers[y] & 0x01;
+        self.registers[x] = self.registers[y] >> 1;
     }
 
     fn subn(&mut self, x: usize, y: usize) {
-        if self.registers[y] > self.registers[x] {
+        if self.registers[y] >= self.registers[x] {
             self.registers[15] = 1;
-            self.registers[x] = self.registers[y] - self.registers[x];
         } else {
             self.registers[15] = 0;
         }
+        self.registers[x] = (self.registers[y] as i32 - self.registers[x] as i32).abs() as u8;
     }
 
-    fn shl(&mut self, x: usize) {
-        self.registers[15] = self.registers[x] >> 7;
-        self.registers[x] <<= 1;
+    fn shl(&mut self, x: usize, y: usize) {
+        let mut y = y;
+        if self.quirk_shift {
+            y = x;
+        }
+        self.registers[15] = (self.registers[y] >> 7) & 0x01;
+        self.registers[x] = self.registers[y] << 1;
     }
 
     fn sne_registers(&mut self, x: usize, y: usize) {
@@ -209,7 +228,7 @@ impl Chip8 {
 
     fn rand(&mut self, x: usize, addr: u16) {
         let random_byte = rand::thread_rng().gen::<u8>();
-        println!("{:02x}", random_byte);
+        // println!("{:02x}", random_byte);
         self.registers[x] = random_byte & addr as u8;
     }
 
@@ -254,7 +273,15 @@ impl Chip8 {
     }
 
     fn ld_key(&mut self, x: usize) {
-        self.registers[x] = self.key;
+        let stdout = Term::buffered_stdout();
+        if let Ok(character) = stdout.read_char() {
+            let character_byte = character.to_string().as_bytes()[0];
+            self.key = match self.keyboard_layout.get(&character_byte) {
+                Some(val) => *val,
+                _ => self.key,
+            };
+            self.registers[x] = self.key;
+        }
     }
 
     fn set_dt(&mut self, x: usize) {
@@ -270,7 +297,7 @@ impl Chip8 {
     }
 
     fn set_i(&mut self, x: usize) {
-        self.i = self.registers[x] as u16;
+        self.i = self.registers[x] as u16 * 5;
     }
 
     fn ld_bcd(&mut self, x: usize) {
@@ -284,19 +311,25 @@ impl Chip8 {
     }
 
     fn ld_v(&mut self, x: usize) {
-        for i in 0..x {
+        for i in 0..=x {
             self.memory[self.i as usize + i] = self.registers[i];
+        }
+        if !self.load_store {
+            self.i = x as u16 + 1;
         }
     }
     fn ld_into_v(&mut self, x: usize) {
-        for i in 0..x {
+        for i in 0..=x {
             self.registers[i] = self.memory[self.i as usize + i];
+        }
+        if !self.load_store {
+            self.i = x as u16 + 1;
         }
     }
     fn load_rom(&mut self, rom: &String) {
         let contents = fs::read(rom).expect("Rom doesn't exist");
 
-        // println!("------- Instructions from the rom --------");
+        println!("------- Instructions from the rom --------");
         // let mut counter = 0;
         for i in 0..(contents.len() / 2) {
             self.memory[0x200 + (i * 2)] = contents[(i * 2)];
@@ -304,14 +337,13 @@ impl Chip8 {
             // println!("{:02x}{:02x}", contents[i * 2], contents[(i * 2) + 1])
             // counter += 1;
         }
-        // println!("--------- End of Instructions ----------")
+        println!("--------- End of Instructions ----------")
         // println!("The counter is {}", counter);
     }
 
     fn emulate_actual_processor(&self) {
-        let instruction_per_second: f32 = 0.7;
-        let delay = (1.0 / self.instructions_per_second) as u64;
-        let duration = time::Duration::from_millis(delay);
+        let delay = 1000.0 / self.instructions_per_second;
+        let duration = time::Duration::from_millis(delay as u64);
         let now = time::Instant::now();
         thread::sleep(duration);
         assert!(now.elapsed() >= duration);
@@ -319,11 +351,9 @@ impl Chip8 {
 
     fn run(&mut self, pc: &usize) {
         let instruction: u16 = ((self.memory[*pc] as u16) << 8) | (self.memory[pc + 1] as u16);
-        // println!("{:04x}", instruction);
 
         match instruction {
             0x00E0 => {
-                println!("Cleared screen");
                 self.cls();
                 return;
             }
@@ -337,12 +367,10 @@ impl Chip8 {
         let param = instruction & 0x0FFF;
         match opcode {
             0x1000 => {
-                let addr = instruction & 0x0FFF;
-                self.jump(addr);
+                self.jump(param);
             }
             0x2000 => {
-                let addr = instruction & 0x0FFF;
-                self.call(addr);
+                self.call(param);
             }
             0x3000 => {
                 let x = (param & 0x0F00) >> 8;
@@ -357,7 +385,9 @@ impl Chip8 {
             0x5000 => {
                 let x = (param & 0x0F00) >> 8;
                 let y = (param & 0x00F0) >> 4;
-                self.se_registers(x as usize, y as usize);
+                if param & 0x000F == 0 {
+                    self.se_registers(x as usize, y as usize);
+                }
             }
             0x6000 => {
                 let x = (param & 0x0F00) >> 8;
@@ -381,14 +411,11 @@ impl Chip8 {
                     0x0004 => self.add_registers(x, y),
                     0x0005 => self.sub(x, y),
                     0x0006 => {
-                        self.shr(x);
-                        println!("Activated Function shr");
-                        self.instructions_per_second = 0.01;
+                        self.shr(x, y);
                     }
                     0x0007 => self.subn(x, y),
                     0x000E => {
-                        self.shl(x);
-                        println!("Activated Function shl");
+                        self.shl(x, y);
                     }
                     _ => (),
                 }
@@ -396,18 +423,17 @@ impl Chip8 {
             0x9000 => {
                 let x = ((param & 0x0F00) >> 8) as usize;
                 let y = ((param & 0x00F0) >> 4) as usize;
-                self.sne_registers(x, y);
+                if param & 0x000F == 0 {
+                    self.sne_registers(x, y);
+                }
             }
             0xA000 => {
-                let byte = param & 0x0FFF;
-                self.ld_i(byte);
+                self.ld_i(param);
             }
             0xB000 => {
-                let byte = param & 0x0FFF;
-                self.jp(byte);
+                self.jp(param);
             }
             0xC000 => {
-                println!("Activated Function rand");
                 let x = (param & 0x0F00) >> 8;
                 let byte = param & 0x00FF;
                 self.rand(x as usize, byte);
@@ -433,10 +459,7 @@ impl Chip8 {
                 let byte = param & 0x00FF;
                 match byte {
                     0x0007 => self.ld_delay(x),
-                    0x000A => {
-                        println!("Checked for the key {}", self.key);
-                        self.ld_key(x);
-                    }
+                    0x000A => self.ld_key(x),
                     0x0015 => self.set_dt(x),
                     0x0018 => self.set_st(x),
                     0x001E => self.add_i(x),
@@ -453,22 +476,15 @@ impl Chip8 {
 }
 
 fn main() {
-    // let stdout = Term::buffered_stdout();
     let mut emulator = Chip8::new();
     emulator.ld_font();
     emulator.ld_layout();
+    emulator.quirk_shift = true;
     let args: Vec<String> = args().collect();
     let filename = &args[1];
     emulator.load_rom(filename);
     loop {
         if emulator.dt == 0 {
-            // if let Ok(character) = stdout.read_char() {
-            //     let character_byte = character.to_string().as_bytes()[0];
-            //     emulator.key = match emulator.keyboard_layout.get(&character_byte) {
-            //         Some(val) => *val,
-            //         _ => emulator.key,
-            //     };
-            // }
             emulator.redraw = false;
             emulator.run(&(emulator.pc as usize));
             if emulator.redraw {
@@ -483,7 +499,10 @@ fn main() {
                     }
                     println!("");
                 }
-                // emulator.cls();
+            }
+            if emulator.st > 0 {
+                // println!("Sound meant to play");
+                emulator.st -= 1;
             }
             emulator.pc += 2;
         } else {
