@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Rust Debug Launch",
+            "program": "${workspaceRoot}/target/debug/${workspaceRootFolderName}",
+            "args": ["${workspaceRoot}/src/roms/PONG"],
+            "cwd": "${workspaceRoot}/target/debug/",
+            "sourceLanguages": ["rust"]
+        }
+    ]
+}
