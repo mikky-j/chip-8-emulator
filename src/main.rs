@@ -1,39 +1,16 @@
-use console::Term;
 use rand::Rng;
-use std::{collections::HashMap, env::args, fs, thread, time};
-struct Stack {
-    data: Vec<u16>,
-}
-
-impl Stack {
-    fn new() -> Stack {
-        Stack { data: vec![] }
-    }
-    fn push(&mut self, n: u16) {
-        // self.pointer += 1;
-        // if self.pointer > 15 {
-        //     panic!("The stack is filled up");
-        // }
-        self.data.push(n);
-    }
-    fn pop(&mut self) -> u16 {
-        // let result = self.data[self.pointer.abs() as usize];
-        // self.pointer -= 1;
-        // result
-        self.data.pop().unwrap()
-    }
-}
+use std::{env::args, fs, io::Write, thread, time};
 struct Chip8 {
     registers: [u8; 16],
     i: u16,
     dt: u8,
     st: u8,
     pc: u16,
-    stack: Stack,
-    key: u8,
+    stack: Vec<u16>,
+    keys: [bool; 16],
     memory: [u8; 4096],
     display: [[bool; 64]; 32],
-    keyboard_layout: HashMap<u8, u8>,
+    keyboard_layout: Vec<u8>,
     redraw: bool,
     quirk_shift: bool,
     load_store: bool,
@@ -43,6 +20,9 @@ struct Chip8 {
 
 impl Chip8 {
     fn new() -> Chip8 {
+        let keys = "x1234qwerasdfzcv";
+        let keyboard_layout = keys.as_bytes().iter().map(|x| *x).collect::<Vec<u8>>();
+
         Chip8 {
             registers: [0; 16],
             i: 0,
@@ -50,10 +30,10 @@ impl Chip8 {
             st: 0,
             sp: 0,
             pc: 0x200,
-            stack: Stack::new(),
-            key: 16,
+            stack: vec![],
+            keys: [false; 16],
             memory: [0; 4096],
-            keyboard_layout: HashMap::new(),
+            keyboard_layout,
             display: [[false; 64]; 32],
             instructions_per_second: 100.0,
             redraw: false,
@@ -89,12 +69,6 @@ impl Chip8 {
         }
     }
 
-    fn ld_layout(&mut self) {
-        let keys = "x1234qwerasdfzcv";
-        for (index, &element) in keys.as_bytes().iter().enumerate() {
-            self.keyboard_layout.insert(element, index as u8);
-        }
-    }
     fn cls(&mut self) {
         self.display = [[false; 64]; 32];
         std::process::Command::new("clear").status().unwrap();
@@ -102,7 +76,7 @@ impl Chip8 {
     }
     fn ret(&mut self) {
         self.sp -= 1;
-        self.pc = self.stack.pop();
+        self.pc = self.stack.pop().unwrap();
     }
 
     fn jump(&mut self, addr: u16) {
@@ -161,9 +135,6 @@ impl Chip8 {
         self.registers[x] ^= self.registers[y];
     }
     fn add_registers(&mut self, x: usize, y: usize) {
-        // let lhs = self.registers[x] as u16;
-        // let rhs = self.registers[y] as u16;
-        // let result = lhs + rhs;
         let (res, overflowing) = self.registers[x].overflowing_add(self.registers[y]);
         if overflowing {
             self.registers[15] = 1;
@@ -184,10 +155,6 @@ impl Chip8 {
     }
 
     fn shr(&mut self, x: usize, y: usize) {
-        // if self.registers[x] ^ 1 == self.registers[x] - 1 {
-        //     self.registers[15] = 1;
-        //     self.registers[x] /= 2;
-        // }
         let mut y = y;
         if self.quirk_shift {
             y = x;
@@ -199,9 +166,9 @@ impl Chip8 {
     fn subn(&mut self, x: usize, y: usize) {
         let (res, overflow) = self.registers[y].overflowing_sub(self.registers[x]);
         if overflow {
-            self.registers[15] = 1;
-        } else {
             self.registers[15] = 0;
+        } else {
+            self.registers[15] = 1;
         }
         self.registers[x] = res;
     }
@@ -244,12 +211,13 @@ impl Chip8 {
                 let row = (c_y + i as usize) % 32;
                 let col = (c_x + j) % 64;
                 if self.display[row][col] {
-                    self.registers[15] = 1;
+                    self.registers[15] |= 1;
                 } else {
-                    self.registers[15] = 0;
+                    self.registers[15] |= 0;
                 }
-                let shift = j as i32 - 7;
-                let temp = pixel >> shift.abs();
+                // let shift = j as i32 - 7;
+                // let temp = pixel >> shift.abs();
+                let temp = pixel >> (7 - j);
                 if temp & 1 == 1 {
                     self.display[row][col] ^= true;
                 } else {
@@ -261,12 +229,15 @@ impl Chip8 {
     }
 
     fn skp(&mut self, x: usize) {
-        if self.key == self.registers[x] {
+        if self.keys[self.registers[x] as usize] {
             self.pc += 2;
         }
     }
     fn sknp(&mut self, x: usize) {
-        if self.key != self.registers[x] {
+        // if self.key != self.registers[x] {
+        //     self.pc += 2;
+        // }
+        if !self.keys[self.registers[x] as usize] {
             self.pc += 2;
         }
     }
@@ -276,14 +247,23 @@ impl Chip8 {
     }
 
     fn ld_key(&mut self, x: usize) {
-        let stdout = Term::buffered_stdout();
-        if let Ok(character) = stdout.read_char() {
-            let character_byte = character.to_string().as_bytes()[0];
-            self.key = match self.keyboard_layout.get(&character_byte) {
-                Some(val) => *val,
-                _ => self.key,
-            };
-            self.registers[x] = self.key;
+        // let stdout = Term::buffered_stdout();
+        // if let Ok(character) = stdout.read_char() {
+        //     let character_byte = character.to_string().as_bytes()[0];
+        //     self.key = match self.keyboard_layout.get(&character_byte) {
+        //         Some(val) => *val,
+        //         _ => self.key,
+        //     };
+        //     self.registers[x] = self.key;
+        // }
+        //Hard-coded a key value becos I haven't chosen drawing library yet
+        let key: u8 = 12;
+        let index = self.keyboard_layout.binary_search(&key);
+        if let Ok(val) = index {
+            self.keys[val] = true;
+            self.registers[x] = val as u8;
+        } else {
+            self.pc -= 2;
         }
     }
 
@@ -296,7 +276,7 @@ impl Chip8 {
     }
 
     fn add_i(&mut self, x: usize) {
-        self.i += self.registers[x] as u16;
+        self.i = self.i.wrapping_add(self.registers[x] as u16);
     }
 
     fn set_i(&mut self, x: usize) {
@@ -352,8 +332,9 @@ impl Chip8 {
         assert!(now.elapsed() >= duration);
     }
 
-    fn run(&mut self, pc: &usize) {
-        let instruction: u16 = ((self.memory[*pc] as u16) << 8) | (self.memory[pc + 1] as u16);
+    fn run(&mut self) {
+        let instruction: u16 = ((self.memory[self.pc as usize] as u16) << 8)
+            | (self.memory[self.pc as usize + 1] as u16);
 
         match instruction {
             0x00E0 => {
@@ -413,13 +394,9 @@ impl Chip8 {
                     0x0003 => self.xor(x, y),
                     0x0004 => self.add_registers(x, y),
                     0x0005 => self.sub(x, y),
-                    0x0006 => {
-                        self.shr(x, y);
-                    }
+                    0x0006 => self.shr(x, y),
                     0x0007 => self.subn(x, y),
-                    0x000E => {
-                        self.shl(x, y);
-                    }
+                    0x000E => self.shl(x, y),
                     _ => (),
                 }
             }
@@ -473,23 +450,37 @@ impl Chip8 {
                     _ => (),
                 }
             }
-            _ => (),
+            _ => {
+                println!("{:04x}", instruction);
+                log(instruction);
+            }
         }
     }
+}
+
+fn log(contents: u16) {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("log.txt")
+        .unwrap();
+    file.write_all(format!("{:04x}\n", contents).as_bytes())
+        .unwrap();
+    file.flush().unwrap();
 }
 
 fn main() {
     let mut emulator = Chip8::new();
     emulator.ld_font();
-    emulator.ld_layout();
-    emulator.quirk_shift = true;
+    // emulator.ld_layout();
+    emulator.load_store = true;
     let args: Vec<String> = args().collect();
     let filename = &args[1];
     emulator.load_rom(filename);
     loop {
         if emulator.dt == 0 {
             emulator.redraw = false;
-            emulator.run(&(emulator.pc as usize));
+            emulator.run();
             if emulator.redraw {
                 std::process::Command::new("clear").status().unwrap();
                 for row in emulator.display {
